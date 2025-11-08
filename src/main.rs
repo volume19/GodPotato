@@ -6,6 +6,7 @@ mod args;
 mod com;
 mod dcom;
 mod error;
+mod exploit;
 
 use args::Args;
 
