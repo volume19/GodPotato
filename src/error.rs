@@ -22,6 +22,13 @@ pub enum GodPotatoError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Platform not supported (Windows only)")]
+    PlatformNotSupported,
+
+    #[cfg(windows)]
+    #[error("Windows error: {0}")]
+    WindowsError(#[from] windows::core::Error),
 }
 
 pub type Result<T> = std::result::Result<T, GodPotatoError>;
