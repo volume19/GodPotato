@@ -12,6 +12,9 @@ name = "godpotato"
 path = "src/main.rs"
 
 [dependencies]
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
 # Binary parsing
 binrw = "0.13"
 
