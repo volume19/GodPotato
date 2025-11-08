@@ -1,0 +1,585 @@
+{
+  "plan_version": "1.0.0",
+  "analysis_date": "2025-11-08",
+  "source_info": {
+    "language": "C# (.NET Framework 2.0)",
+    "total_lines": 2879,
+    "file_count": 10,
+    "primary_target": "x86_64-pc-windows-msvc",
+    "secondary_target": "x86_64-unknown-linux-gnu (limited functionality)",
+    "purpose": "Windows privilege escalation research tool - exploits DCOM/RPC vulnerability to escalate from service account with ImpersonatePrivilege to NT AUTHORITY\\SYSTEM"
+  },
+
+  "component_map": [
+    {
+      "csharp_file": "Program.cs",
+      "namespace": "GodPotato",
+      "estimated_loc": 121,
+      "rust_module": "src/main.rs",
+      "description": "CLI entry point, orchestrates exploit workflow",
+      "dependencies": ["clap or structopt for args", "anyhow for error handling"],
+      "notes": "Simple main function, easy to port"
+    },
+    {
+      "csharp_file": "ArgsParse.cs",
+      "namespace": "GodPotato",
+      "estimated_loc": 216,
+      "rust_module": "src/args.rs",
+      "description": "Attribute-based command-line argument parser using reflection",
+      "dependencies": ["clap v4 with derive macros"],
+      "notes": "C# uses reflection heavily; Rust will use clap derive macros for cleaner approach"
+    },
+    {
+      "csharp_file": "SharpToken.cs",
+      "namespace": "SharpToken",
+      "estimated_loc": 1431,
+      "rust_module": "src/token/mod.rs, src/token/process.rs, src/token/native.rs",
+      "description": "Windows token manipulation, process enumeration, privilege adjustment, process creation with token",
+      "dependencies": ["windows-sys v0.52+", "windows v0.52+ for high-level APIs"],
+      "notes": "Largest file; split into: token operations, process operations, native FFI bindings"
+    },
+    {
+      "csharp_file": "NativeAPI/NativeMethods.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 194,
+      "rust_module": "src/ffi/native_methods.rs",
+      "description": "P/Invoke declarations for Win32 APIs (kernel32, advapi32, ole32)",
+      "dependencies": ["windows-sys for raw bindings"],
+      "notes": "Direct translation to extern \"system\" fn declarations"
+    },
+    {
+      "csharp_file": "NativeAPI/GodPotatoContext.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 488,
+      "rust_module": "src/exploit/context.rs",
+      "description": "Core exploit: RPC hooking, named pipe server, token capture, Sunday pattern matching",
+      "dependencies": ["windows for named pipes", "parking_lot for threading"],
+      "notes": "Complex: memory manipulation, function pointer hooking, multi-threaded pipe server"
+    },
+    {
+      "csharp_file": "NativeAPI/GodPotatoUnmarshalTrigger.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 70,
+      "rust_module": "src/exploit/trigger.rs",
+      "description": "DCOM unmarshaling trigger to initiate RPC callback",
+      "dependencies": ["windows for COM APIs"],
+      "notes": "COM interop; requires careful handling of IUnknown, IBindCtx, IMoniker"
+    },
+    {
+      "csharp_file": "NativeAPI/IStreamImpl.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 112,
+      "rust_module": "src/com/stream.rs",
+      "description": "IStream COM interface wrapper around memory stream",
+      "dependencies": ["windows for IStream"],
+      "notes": "Implement IStream vtable in Rust using windows-rs COM support"
+    },
+    {
+      "csharp_file": "NativeAPI/ObjRef.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 235,
+      "rust_module": "src/dcom/objref.rs",
+      "description": "DCOM OBJREF structure serialization/deserialization (Standard, StringBinding, SecurityBinding, DualStringArray)",
+      "dependencies": ["serde for structured serialization", "byteorder for endianness"],
+      "notes": "Binary protocol parsing; use zerocopy or binrw for safer binary parsing"
+    },
+    {
+      "csharp_file": "NativeAPI/UnmarshalDCOM.cs",
+      "namespace": "GodPotato.NativeAPI",
+      "estimated_loc": 21,
+      "rust_module": "src/dcom/unmarshal.rs",
+      "description": "Wrapper for CoUnmarshalInterface",
+      "dependencies": ["windows for COM"],
+      "notes": "Simple wrapper, minimal porting effort"
+    },
+    {
+      "csharp_file": "Properties/AssemblyInfo.cs",
+      "namespace": "GodPotato",
+      "estimated_loc": 36,
+      "rust_module": "Cargo.toml metadata",
+      "description": "Assembly metadata",
+      "dependencies": [],
+      "notes": "Translated to Cargo.toml [package] metadata"
+    }
+  ],
+
+  "public_api_map": {
+    "cli_interface": {
+      "csharp": "GodPotatoArgs { string cmd }",
+      "rust": "struct Args { cmd: String }",
+      "ownership": "Owned String, passed by value to execution"
+    },
+    "token_operations": {
+      "csharp": "ProcessToken.Cast(IntPtr, int, IntPtr, IntPtr) -> ProcessToken",
+      "rust": "fn process_token_from_handle(target_token: HANDLE, pid: u32, process_handle: HANDLE, token_handle: HANDLE) -> Result<ProcessToken>",
+      "ownership": "ProcessToken owns HANDLE; implements Drop to call CloseHandle"
+    },
+    "process_creation": {
+      "csharp": "ProcessToken.CreateProcess(string, bool, uint, ref STARTUPINFO, out PROCESS_INFORMATION) -> bool",
+      "rust": "fn create_process_with_token(&self, cmd: &str, inherit_handles: bool, flags: u32, startup_info: &STARTUPINFO) -> Result<PROCESS_INFORMATION>",
+      "ownership": "Borrows token, returns owned PROCESS_INFORMATION with Drop impl"
+    },
+    "exploit_context": {
+      "csharp": "GodPotatoContext(TextWriter, string) -> void, methods: HookRPC(), Start(), GetToken()",
+      "rust": "struct ExploitContext { ... } impl ExploitContext { fn new(pipe_name: String) -> Result<Self>, fn hook_rpc(&mut self) -> Result<()>, fn start(&mut self) -> Result<()>, fn get_token(&self) -> Option<WindowsIdentity> }",
+      "ownership": "ExploitContext owns pipe handle, thread handles; Drop restores RPC hook and stops threads"
+    },
+    "objref_parsing": {
+      "csharp": "ObjRef(byte[]) -> ObjRef, GetBytes() -> byte[]",
+      "rust": "struct ObjRef { ... } impl ObjRef { fn from_bytes(data: &[u8]) -> Result<Self>, fn to_bytes(&self) -> Vec<u8> }",
+      "ownership": "Borrows input slice, returns owned Vec for serialization"
+    }
+  },
+
+  "tricky_patterns": [
+    {
+      "pattern": "P/Invoke and FFI",
+      "csharp_example": "[DllImport(\"kernel32\")] static extern IntPtr OpenProcess(...);",
+      "rust_mitigation": "Use windows-sys or windows crate for safe bindings. Wrap all HANDLE in newtype with Drop impl to ensure CloseHandle is called. Use #[repr(C)] for struct layout.",
+      "risk": "Memory leaks if handles not closed; ABI mismatch if struct layout wrong",
+      "defensive_strategy": "RAII pattern: all handles owned by typed wrappers with Drop; use windows-rs metadata-driven bindings"
+    },
+    {
+      "pattern": "Reflection for argument parsing",
+      "csharp_example": "typeof(T).GetProperties(), Attribute.GetCustomAttribute(...), propertyInfo.SetValue(...)",
+      "rust_mitigation": "Replace with clap derive macros: #[derive(Parser)] and #[arg(...)] attributes. No runtime reflection needed.",
+      "risk": "None - compile-time only",
+      "defensive_strategy": "Use well-tested clap library; add comprehensive CLI tests"
+    },
+    {
+      "pattern": "Unsafe memory manipulation (VirtualProtect, Marshal.WriteIntPtr)",
+      "csharp_example": "VirtualProtect(DispatchTablePtr, size, 0x04, out old); Marshal.WriteIntPtr(DispatchTablePtr, funcPtr);",
+      "rust_mitigation": "Use windows::Win32::System::Memory::VirtualProtect in unsafe block. Document safety invariants: 1) DispatchTablePtr must be valid, 2) size must be accurate, 3) restoration required. Use ManuallyDrop and explicit restore in Drop.",
+      "risk": "High - modifying system memory; could crash process or corrupt state",
+      "defensive_strategy": "1) Verify pointers before writing, 2) Always restore original in Drop, 3) Limit scope of unsafe, 4) Add safety comments"
+    },
+    {
+      "pattern": "COM Interop (IStream, IBindCtx, IMoniker, CoUnmarshalInterface)",
+      "csharp_example": "class IStreamImpl : IStream { ... }, NativeMethods.CoUnmarshalInterface(new IStreamImpl(stm), ref iid, out ppv);",
+      "rust_mitigation": "Use windows-rs COM support: #[implement(IStream)] macro. Implement vtable methods. Use ComInterface trait for safe QueryInterface.",
+      "risk": "Memory safety - COM uses manual reference counting; incorrect AddRef/Release causes leaks or use-after-free",
+      "defensive_strategy": "1) Use windows-rs ComPtr and Interface wrappers, 2) Never manually call AddRef/Release, 3) Test with ASAN/MSAN if possible"
+    },
+    {
+      "pattern": "Threading with shared mutable state",
+      "csharp_example": "Thread pipeServerThread = new Thread(PipeServer); systemIdentity shared between threads",
+      "rust_mitigation": "Use Arc<Mutex<Option<WindowsIdentity>>> for shared token. Use parking_lot::Mutex for performance. Return Result from thread, handle with JoinHandle.",
+      "risk": "Data races, deadlocks",
+      "defensive_strategy": "1) Rust Send/Sync bounds prevent data races at compile time, 2) Use scoped threads when possible, 3) Keep critical sections small"
+    },
+    {
+      "pattern": "Exception-based error handling",
+      "csharp_example": "throw new Exception(\"No combase module found\"); catch (Exception e) { ... }",
+      "rust_mitigation": "Define enum Error using thiserror: #[derive(Error, Debug)] enum GodPotatoError { #[error(\"No combase module found\")] NoCombaseModule, ... }. Return Result<T, GodPotatoError>.",
+      "risk": "None - Result is safer than exceptions",
+      "defensive_strategy": "Use anyhow for application errors, thiserror for library errors; never use unwrap() in production paths"
+    },
+    {
+      "pattern": "Binary serialization with BinaryReader/Writer",
+      "csharp_example": "BinaryWriter.Write(Guid.ToByteArray()); BinaryReader.ReadUInt32(), ReadUInt64(), etc.",
+      "rust_mitigation": "Use binrw or zerocopy for declarative binary parsing with derive macros. Ensures correct endianness and alignment.",
+      "risk": "Endianness bugs, alignment issues, buffer overflows",
+      "defensive_strategy": "1) Use binrw with #[derive(BinRead, BinWrite)], 2) Add tests with known-good byte sequences, 3) Validate lengths before allocating"
+    },
+    {
+      "pattern": "Process module enumeration and memory reading",
+      "csharp_example": "Process.GetCurrentProcess().Modules, Marshal.Copy(processModule.BaseAddress, dllContent, 0, length)",
+      "rust_mitigation": "Use windows::Win32::System::ProcessStatus::EnumProcessModules + GetModuleInformation. Read memory with ReadProcessMemory or, for current process, std::slice::from_raw_parts in unsafe.",
+      "risk": "Reading unmapped memory causes access violation",
+      "defensive_strategy": "1) Validate module bounds before reading, 2) Handle errors gracefully, 3) Use VirtualQuery to check memory protection"
+    },
+    {
+      "pattern": "Sunday pattern matching algorithm on binary data",
+      "csharp_example": "Sunday.Search(dllContent, pattern) -> List<int>",
+      "rust_mitigation": "Port Sunday algorithm or use memchr/aho-corasick crate for optimized pattern matching. Return Vec<usize>.",
+      "risk": "Out-of-bounds access if not careful with indices",
+      "defensive_strategy": "1) Use safe slicing with .get(), 2) Add unit tests with edge cases (pattern at start, end, not found), 3) Consider using memchr for single-byte patterns"
+    },
+    {
+      "pattern": "Delegate and function pointer manipulation",
+      "csharp_example": "Delegate useProtseqDelegate = ...; Marshal.GetFunctionPointerForDelegate(useProtseqDelegate)",
+      "rust_mitigation": "Define extern \"system\" fn type, use std::mem::transmute or raw function pointers. Store in struct to keep alive (prevent GC equivalent).",
+      "risk": "Calling convention mismatch, dangling function pointers",
+      "defensive_strategy": "1) Explicitly annotate calling convention, 2) Keep closure/fn alive for lifetime of hook, 3) Document ABI assumptions"
+    }
+  ],
+
+  "prioritized_files": [
+    {
+      "order": 1,
+      "file": "NativeAPI/ObjRef.cs",
+      "rationale": "Self-contained binary parsing logic, no external dependencies except standard library. Good test target for establishing binary serialization patterns.",
+      "estimated_effort_hours": 4
+    },
+    {
+      "order": 2,
+      "file": "ArgsParse.cs",
+      "rationale": "Independent CLI parsing, replaced entirely by clap. Quick win to establish project structure.",
+      "estimated_effort_hours": 2
+    },
+    {
+      "order": 3,
+      "file": "NativeAPI/UnmarshalDCOM.cs",
+      "rationale": "Small wrapper, depends on COM but simple API. Tests COM setup.",
+      "estimated_effort_hours": 2
+    },
+    {
+      "order": 4,
+      "file": "NativeAPI/IStreamImpl.cs",
+      "rationale": "COM interface implementation. Depends on ObjRef completion for testing. Validates windows-rs COM patterns.",
+      "estimated_effort_hours": 4
+    },
+    {
+      "order": 5,
+      "file": "NativeAPI/NativeMethods.cs",
+      "rationale": "FFI declarations, straightforward but tedious. Needed by multiple modules.",
+      "estimated_effort_hours": 3
+    },
+    {
+      "order": 6,
+      "file": "SharpToken.cs (token manipulation part)",
+      "rationale": "Core Windows token operations. Large file, split into manageable chunks. Start with struct definitions and simple helpers.",
+      "estimated_effort_hours": 12
+    },
+    {
+      "order": 7,
+      "file": "SharpToken.cs (process creation part)",
+      "rationale": "Process creation with multiple fallback strategies. Depends on token operations.",
+      "estimated_effort_hours": 8
+    },
+    {
+      "order": 8,
+      "file": "NativeAPI/GodPotatoUnmarshalTrigger.cs",
+      "rationale": "DCOM trigger logic. Depends on ObjRef, IStreamImpl, UnmarshalDCOM.",
+      "estimated_effort_hours": 4
+    },
+    {
+      "order": 9,
+      "file": "NativeAPI/GodPotatoContext.cs (Sunday algorithm)",
+      "rationale": "Pattern matching utility, independent. Can be unit tested easily.",
+      "estimated_effort_hours": 2
+    },
+    {
+      "order": 10,
+      "file": "NativeAPI/GodPotatoContext.cs (main context)",
+      "rationale": "Most complex: memory manipulation, RPC hooking, threading. Requires all previous components.",
+      "estimated_effort_hours": 16
+    },
+    {
+      "order": 11,
+      "file": "Program.cs",
+      "rationale": "Final integration, orchestrates all components. Last piece.",
+      "estimated_effort_hours": 2
+    }
+  ],
+
+  "tests_spec": {
+    "unit_tests": [
+      {
+        "test_id": "objref_001",
+        "description": "Parse valid OBJREF byte stream",
+        "input": "Hex-encoded OBJREF from real DCOM marshal",
+        "expected_output": "ObjRef struct with correct GUID, OXID, OID, IPID, binding info",
+        "fixtures": "Sample OBJREF bytes captured from C# version"
+      },
+      {
+        "test_id": "objref_002",
+        "description": "Serialize ObjRef to bytes",
+        "input": "ObjRef with known values",
+        "expected_output": "Byte array matching expected DCOM format",
+        "fixtures": "Known-good byte sequences"
+      },
+      {
+        "test_id": "objref_003",
+        "description": "Round-trip: parse then serialize",
+        "input": "OBJREF bytes",
+        "expected_output": "Identical bytes after parse -> serialize",
+        "fixtures": "Multiple OBJREF samples"
+      },
+      {
+        "test_id": "args_001",
+        "description": "Parse valid command line",
+        "input": "-cmd \"cmd /c whoami\"",
+        "expected_output": "Args { cmd: \"cmd /c whoami\" }",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "args_002",
+        "description": "Reject missing required argument",
+        "input": "Empty args",
+        "expected_output": "Error with usage message",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "sunday_001",
+        "description": "Find pattern at start of data",
+        "input": "data: [1,2,3,4,5], pattern: [1,2,3]",
+        "expected_output": "[0]",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "sunday_002",
+        "description": "Find pattern at end",
+        "input": "data: [1,2,3,4,5], pattern: [3,4,5]",
+        "expected_output": "[2]",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "sunday_003",
+        "description": "Pattern not found",
+        "input": "data: [1,2,3,4,5], pattern: [9,9,9]",
+        "expected_output": "[]",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "sunday_004",
+        "description": "Multiple matches",
+        "input": "data: [1,2,1,2,1,2], pattern: [1,2]",
+        "expected_output": "[0, 2, 4]",
+        "fixtures": "None"
+      },
+      {
+        "test_id": "token_001",
+        "description": "Parse token integrity level",
+        "input": "Mock token handle with known integrity",
+        "expected_output": "IntegrityLevel enum value",
+        "fixtures": "Mock Windows API responses"
+      }
+    ],
+    "integration_tests": [
+      {
+        "test_id": "integ_001",
+        "description": "Full exploit flow on test system (requires Windows VM with specific setup)",
+        "input": "Run as service account with SeImpersonatePrivilege, execute: godpotato -cmd \"cmd /c whoami\"",
+        "expected_output": "Output shows \"nt authority\\system\"",
+        "fixtures": "Windows Server 2019 VM with test service account",
+        "notes": "Requires privileged test environment; not for CI"
+      },
+      {
+        "test_id": "integ_002",
+        "description": "COM initialization and cleanup",
+        "input": "Create IStreamImpl, marshal/unmarshal",
+        "expected_output": "No memory leaks, proper refcount",
+        "fixtures": "COM test harness"
+      }
+    ],
+    "security_tests": [
+      {
+        "test_id": "sec_001",
+        "description": "Verify no buffer overflows in binary parsing",
+        "input": "Malformed OBJREF with invalid lengths",
+        "expected_output": "Error, not crash or UB",
+        "fixtures": "Fuzzer-generated inputs"
+      },
+      {
+        "test_id": "sec_002",
+        "description": "Handle TOCTOU in process enumeration gracefully",
+        "input": "Enumerate tokens while killing processes",
+        "expected_output": "Errors for invalid handles, no crash",
+        "fixtures": "Concurrent process spawner"
+      }
+    ]
+  },
+
+  "verification_commands": {
+    "build": {
+      "windows": [
+        "cargo build --release --target x86_64-pc-windows-msvc",
+        "Expected: exit code 0, artifact at target/x86_64-pc-windows-msvc/release/godpotato.exe"
+      ],
+      "linux": [
+        "cargo build --release --target x86_64-unknown-linux-gnu",
+        "Expected: exit code 0 OR compile-time error for Windows-only features (acceptable)"
+      ]
+    },
+    "test": {
+      "unit": [
+        "cargo test --workspace --lib",
+        "Expected: All unit tests pass, no panics"
+      ],
+      "integration": [
+        "cargo test --workspace --test '*'",
+        "Expected: Integration tests pass on Windows with appropriate privileges; skipped on Linux"
+      ],
+      "doc": [
+        "cargo test --workspace --doc",
+        "Expected: All doc tests pass"
+      ]
+    },
+    "lint": {
+      "clippy": [
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "Expected: No warnings"
+      ],
+      "fmt": [
+        "cargo fmt --all -- --check",
+        "Expected: No formatting diff"
+      ]
+    },
+    "audit": {
+      "dependencies": [
+        "cargo audit",
+        "Expected: No vulnerabilities in dependencies"
+      ],
+      "deny": [
+        "cargo deny check",
+        "Expected: No banned dependencies, valid licenses (Apache-2.0 compatible)"
+      ]
+    },
+    "runtime": {
+      "help": [
+        "./target/release/godpotato.exe --help",
+        "Expected: Usage message with -cmd option"
+      ],
+      "version": [
+        "./target/release/godpotato.exe --version",
+        "Expected: Version string matching Cargo.toml"
+      ],
+      "functional": [
+        "Run on Windows Server 2019 as service account: godpotato.exe -cmd \"cmd /c whoami\" > output.txt",
+        "Expected: output.txt contains 'nt authority\\system' OR error message if exploit fails (acceptable - depends on environment)"
+      ]
+    },
+    "diff_rules": {
+      "behavior": "Functional parity: same privilege escalation technique, same command execution",
+      "output": "Console output format may differ slightly (Rust doesn't have Console.WriteLine; use println!); key info (PIDs, token values, success/failure) must match",
+      "error_handling": "Rust uses Result; may have different error messages but same error conditions"
+    }
+  },
+
+  "recommended_crates": [
+    {
+      "name": "windows",
+      "version": "0.52",
+      "purpose": "High-level Windows API bindings with COM support, safer than raw windows-sys",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "Official Microsoft crate, 10M+ downloads, actively maintained, well-tested"
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.52",
+      "purpose": "Low-level Windows API bindings for FFI",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "Official Microsoft crate, used by windows crate, minimal dependencies"
+    },
+    {
+      "name": "clap",
+      "version": "4.4",
+      "purpose": "Command-line argument parsing with derive macros",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "Most popular Rust CLI crate, 20M+ downloads, extensive testing, used in cargo itself"
+    },
+    {
+      "name": "thiserror",
+      "version": "1.0",
+      "purpose": "Ergonomic error type definitions",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "dtolnay (Rust core team), 40M+ downloads, stable API"
+    },
+    {
+      "name": "anyhow",
+      "version": "1.0",
+      "purpose": "Flexible error handling for application code",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "dtolnay, 40M+ downloads, complementary to thiserror"
+    },
+    {
+      "name": "binrw",
+      "version": "0.13",
+      "purpose": "Declarative binary parsing with derive macros",
+      "license": "MIT",
+      "trust_rationale": "Specialized for binary protocols, 200K+ downloads, well-documented, safer than manual parsing"
+    },
+    {
+      "name": "parking_lot",
+      "version": "0.12",
+      "purpose": "Faster, smaller mutexes than std",
+      "license": "MIT OR Apache-2.0",
+      "trust_rationale": "10M+ downloads, used in many production systems, well-audited"
+    },
+    {
+      "name": "tracing",
+      "version": "0.1",
+      "purpose": "Structured logging and diagnostics",
+      "license": "MIT",
+      "trust_rationale": "Tokio project, 30M+ downloads, production-grade observability"
+    },
+    {
+      "name": "tracing-subscriber",
+      "version": "0.3",
+      "purpose": "Logging output formatting",
+      "license": "MIT",
+      "trust_rationale": "Companion to tracing, same trust level"
+    }
+  ],
+
+  "rust_project_structure": {
+    "cargo_workspace": false,
+    "binary_name": "godpotato",
+    "modules": [
+      "src/main.rs - Entry point",
+      "src/args.rs - CLI argument parsing",
+      "src/error.rs - Error types (GodPotatoError enum)",
+      "src/ffi/ - FFI bindings module",
+      "src/ffi/native_methods.rs - extern \"system\" fn declarations",
+      "src/ffi/types.rs - FFI type definitions (HANDLE newtypes, structs)",
+      "src/token/ - Token manipulation module",
+      "src/token/mod.rs - Public API",
+      "src/token/process.rs - Process token operations",
+      "src/token/native.rs - Low-level token FFI wrappers",
+      "src/dcom/ - DCOM module",
+      "src/dcom/objref.rs - ObjRef serialization",
+      "src/dcom/unmarshal.rs - CoUnmarshalInterface wrapper",
+      "src/com/ - COM module",
+      "src/com/stream.rs - IStream implementation",
+      "src/exploit/ - Exploit logic module",
+      "src/exploit/context.rs - GodPotatoContext, RPC hooking, pipe server",
+      "src/exploit/trigger.rs - DCOM trigger",
+      "src/exploit/sunday.rs - Sunday pattern matching algorithm",
+      "tests/ - Integration tests",
+      "tests/objref_tests.rs",
+      "tests/sunday_tests.rs"
+    ]
+  },
+
+  "platform_isolation_strategy": {
+    "windows_only_modules": [
+      "src/ffi/",
+      "src/token/",
+      "src/dcom/",
+      "src/com/",
+      "src/exploit/"
+    ],
+    "cross_platform_modules": [
+      "src/args.rs",
+      "src/error.rs"
+    ],
+    "cfg_gating": "Use #[cfg(target_os = \"windows\")] on Windows-only modules. Provide stub implementations or compile-time errors for Linux.",
+    "rationale": "Core exploit is Windows-only; args and error handling can compile on all platforms for development convenience"
+  },
+
+  "security_hardening_notes": {
+    "principle_1_minimal_privileges": "Tool requires SeImpersonatePrivilege to function (by design). Document required privileges in README. Do not request additional privileges.",
+    "principle_2_input_validation": "Validate all binary inputs (OBJREF parsing) to prevent buffer overflows. Use binrw's validation features.",
+    "principle_3_memory_safety": "Use RAII for all HANDLEs. Never use mem::forget. Minimize unsafe blocks and document safety invariants.",
+    "principle_4_error_handling": "Never unwrap() in production code paths. Use ? operator and proper Result propagation.",
+    "principle_5_auditability": "Use tracing for structured logging. Log: module load addresses, RPC hook installation, pipe connections, token captures, process creation. Levels: info for normal flow, warn for anomalies, error for failures.",
+    "principle_6_no_evasion": "Do not implement: anti-debugging, VM detection, EDR evasion, log clearing, timestomping, or any detection-avoidance techniques. This is a research tool for authorized testing only."
+  },
+
+  "license_compliance": {
+    "source_license": "Apache-2.0 (from original C# project)",
+    "rust_port_license": "Apache-2.0 (maintain compatibility)",
+    "dependency_licenses": "All recommended crates are MIT OR Apache-2.0, fully compatible"
+  },
+
+  "estimated_total_effort": {
+    "analysis_complete": true,
+    "implementation_hours": 59,
+    "testing_hours": 12,
+    "documentation_hours": 6,
+    "ci_setup_hours": 3,
+    "total_hours": 80,
+    "notes": "Assumes developer experienced with Rust FFI and Windows internals. First iteration to feature parity."
+  }
+}
