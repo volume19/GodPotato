@@ -3,3 +3,8 @@
 /obj/
 GodPotato.csproj.user
 app.config
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
