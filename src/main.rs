@@ -7,6 +7,7 @@ mod com;
 mod dcom;
 mod error;
 mod exploit;
+mod token;
 
 use args::Args;
 
